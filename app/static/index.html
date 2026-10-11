@@ -1,0 +1,498 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Live Market Signal Board</title>
+  <style>
+    :root { color-scheme: dark; font: 15px/1.5 system-ui, sans-serif; background: #0c1220; color: #e5eaf3; }
+    [hidden] { display: none !important; }
+    body { margin: 0 auto; max-width: 1200px; padding: 28px 20px; }
+    header { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+    h1 { margin: 0; font-size: 1.7rem; }
+    .status, .muted { color: #98a6bc; }
+    .status::before { content: ""; display: inline-block; width: 9px; height: 9px; margin-right: 8px; border-radius: 50%; background: #e2a33a; }
+    .status.connected::before { background: #44d19d; }
+    .chart-controls { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-bottom: 14px; }
+    .chart-mode { color: #44d19d; font-size: .8rem; }
+    select { background: #0c1220; color: #e5eaf3; border: 1px solid #26334a; border-radius: 8px; padding: 8px 10px; }
+    input { width: 110px; background: #0c1220; color: #e5eaf3; border: 1px solid #26334a; border-radius: 8px; padding: 8px 10px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin: 24px 0; }
+    .card, section { background: #141d2e; border: 1px solid #26334a; border-radius: 12px; padding: 18px; }
+    .card h2 { margin: 0; font-size: 1rem; color: #aab8ce; }
+    .price { font-size: 1.8rem; font-variant-numeric: tabular-nums; margin-top: 8px; }
+    section { margin: 16px 0; overflow-x: auto; }
+    h2 { margin: 0 0 14px; }
+    #chart { height: min(68vh, 620px); min-height: 360px; }
+    #chart-placeholder { min-height: 180px; display: grid; place-items: center; text-align: center; color: #98a6bc; }
+    #fallback-chart { height: min(68vh, 620px); min-height: 360px; }
+    table { border-collapse: collapse; width: 100%; min-width: 680px; text-align: left; }
+    th, td { padding: 10px 12px; border-bottom: 1px solid #26334a; white-space: nowrap; }
+    th { color: #9cabc2; font-weight: 600; }
+    .buy { color: #44d19d; font-weight: 700; }
+    .sell { color: #ff7885; font-weight: 700; }
+    .empty { color: #98a6bc; text-align: center; padding: 22px; }
+    .note { font-size: .9rem; color: #98a6bc; }
+    .analysis-controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    button { background: #0e8f70; border: 0; border-radius: 8px; color: white; padding: 9px 14px; font-weight: 700; cursor: pointer; }
+    button:disabled { opacity: .6; cursor: wait; }
+    .analysis-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-top: 16px; }
+    .analysis-cell { border: 1px solid #26334a; border-radius: 8px; padding: 12px; }
+    .analysis-cell strong { display: block; margin-top: 4px; }
+    .analysis-warning { color: #f4bb57; margin-top: 12px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div><h1>Live Market Signal Board</h1><div class="muted">On-demand closed-candle analysis · Binance + Twelve Data</div></div>
+    <div id="status" class="status">Connecting to Binance…</div>
+  </header>
+  <main>
+    <section>
+      <div class="chart-controls">
+        <h2 style="margin:0 auto 0 0">TradingView Chart · live market data</h2>
+        <span id="chart-mode" class="chart-mode"></span>
+        <label class="muted" for="chart-symbol">Market</label>
+        <select id="chart-symbol" aria-label="Chart market"></select>
+        <label class="muted" for="chart-interval">Timeframe</label>
+        <select id="chart-interval" aria-label="Chart timeframe"></select>
+      </div>
+      <p id="twelve-status" class="note"></p>
+      <p id="news-status" class="note"></p>
+      <div id="chart-placeholder">Checking for licensed TradingView Charting Library assets…</div>
+      <div id="chart"></div>
+    </section>
+    <div id="prices" class="grid"></div>
+    <section>
+      <h2>Closed-Candle Analysis</h2>
+      <div class="analysis-controls">
+        <label class="muted" for="trade-preference">Trade preference</label>
+        <select id="trade-preference" aria-label="Trade preference">
+          <option value="ANY">Any direction</option>
+          <option value="LONG">Long only</option>
+          <option value="SHORT">Short only</option>
+        </select>
+        <label class="muted" for="account-balance">Balance (USD)</label>
+        <input id="account-balance" type="number" min="0.01" step="any" inputmode="decimal" placeholder="Optional">
+        <label class="muted" for="risk-percent">Risk %</label>
+        <input id="risk-percent" type="number" min="0.1" max="2" step="0.1" value="1">
+        <button id="analyze-button" type="button">Start Get A Signal</button>
+        <span id="analysis-updated" class="muted"></span>
+      </div>
+      <div id="analysis-result" class="muted" aria-live="polite">Choose a market and timeframe, then press “Start Get A Signal”.</div>
+      <p class="note">Confidence is a qualitative band from an uncalibrated indicator score, not accuracy or probability. Technical analysis is cached per closed candle; higher-timeframe and news safety checks are refreshed and may downgrade a signal to WAIT. No indicator can guarantee a 90% hit rate or predict a candle with certainty.</p>
+    </section>
+    <section>
+      <h2>Signal Performance</h2>
+      <div id="performance-summary" class="muted">Loading resolved next-candle outcomes…</div>
+      <p id="signal-alert" class="analysis-warning" aria-live="polite"></p>
+      <p class="note">Win rate measures next-candle direction only, not account returns or realized trade P&amp;L. Outcomes are finalized when the next candle closes.</p>
+    </section>
+  </main>
+  <script src="/static/binance_datafeed.js"></script>
+  <script>
+    const priceCards = new Map();
+    const format = (value) => Number(value).toLocaleString(undefined, { maximumSignificantDigits: 10 });
+    const status = document.getElementById("status");
+    const prices = document.getElementById("prices");
+    const performanceSummary = document.getElementById("performance-summary");
+    const signalAlert = document.getElementById("signal-alert");
+    const chartPlaceholder = document.getElementById("chart-placeholder");
+    const chartMode = document.getElementById("chart-mode");
+    const chartSymbolSelect = document.getElementById("chart-symbol");
+    const chartIntervalSelect = document.getElementById("chart-interval");
+    const twelveStatus = document.getElementById("twelve-status");
+    const newsStatus = document.getElementById("news-status");
+    const tradePreferenceSelect = document.getElementById("trade-preference");
+    const analyzeButton = document.getElementById("analyze-button");
+    const accountBalanceInput = document.getElementById("account-balance");
+    const riskPercentInput = document.getElementById("risk-percent");
+    const analysisResult = document.getElementById("analysis-result");
+    const analysisUpdated = document.getElementById("analysis-updated");
+    let datafeed;
+    let chartWidget;
+    let fallbackChart;
+    let fallbackCandleSeries;
+    let fallbackLastBarTime;
+    let selectedChartSymbol;
+    let selectedChartInterval;
+    let historyRequestId = 0;
+    let binanceSymbols = [];
+    let analysisPending = false;
+    let feedStatus = { state: "starting", ping_interval_seconds: 10 };
+
+    function renderFeedStatus(feed) {
+      feedStatus = feed || feedStatus;
+      const state = feedStatus.state || "starting";
+      const labels = {
+        connected: `Live data connected · exchange ping every ${feedStatus.ping_interval_seconds || 10}s`,
+        stale: "Exchange connected · market data stale",
+        connecting: "Connecting to exchange market data…",
+        reconnecting: `Exchange disconnected · reconnecting (attempt ${feedStatus.reconnect_attempt || 1})`,
+        unavailable: `Exchange feed unavailable${feedStatus.error ? ` · ${feedStatus.error}` : ""}`,
+        starting: "Starting exchange market feed…"
+      };
+      status.textContent = labels[state] || "Exchange market feed status unknown";
+      status.classList.toggle("connected", state === "connected");
+    }
+
+    function renderPrice(data) {
+      let card = priceCards.get(data.symbol);
+      if (!card) {
+        card = document.createElement("article");
+        card.className = "card";
+        card.innerHTML = `<h2></h2><div class="price"></div><div class="muted"></div>`;
+        prices.append(card);
+        priceCards.set(data.symbol, card);
+      }
+      card.querySelector("h2").textContent = data.symbol;
+      card.querySelector(".price").textContent = format(data.price);
+      card.querySelector(".muted").textContent = `${data.source || "Binance WebSocket"} · ${data.interval}`;
+    }
+
+    async function initializeChart() {
+      try {
+        const response = await fetch("/api/snapshot");
+        if (!response.ok) throw new Error(`Market configuration request failed (${response.status}).`);
+        const snapshot = await response.json();
+        renderFeedStatus(snapshot.feed);
+        const symbols = snapshot.symbols || [];
+        const intervals = snapshot.intervals || [];
+        if (!symbols.length || !intervals.length) throw new Error("No chart symbols or intervals are configured.");
+        binanceSymbols = snapshot.binance_symbols || [];
+        twelveStatus.textContent = snapshot.twelve_data_configured
+          ? "Twelve Data is configured; symbol coverage, real-time entitlement, and request limits depend on your plan."
+          : "Twelve Data is not configured. Add TWELVE_DATA_API_KEY to your local .env to enable Forex, XAU/USD, XAG/USD, and stocks.";
+        newsStatus.textContent = snapshot.finnhub_configured
+          ? "Finnhub economic-news blackout filter is configured."
+          : "Finnhub news filter is not configured; signal generation will remain NO-TRADE until FINNHUB_API_KEY is set.";
+        datafeed = new window.BinanceDatafeed(symbols, intervals, snapshot.binance_symbols || []);
+        selectedChartSymbol = symbols[0];
+        selectedChartInterval = intervals[0];
+        for (const symbol of symbols) {
+          const option = document.createElement("option");
+          option.value = symbol;
+          option.textContent = symbol;
+          chartSymbolSelect.append(option);
+        }
+        for (const interval of intervals) {
+          const option = document.createElement("option");
+          option.value = interval;
+          option.textContent = interval;
+          chartIntervalSelect.append(option);
+        }
+        chartSymbolSelect.addEventListener("change", () => changeChartSelection());
+        chartIntervalSelect.addEventListener("change", () => changeChartSelection());
+        analyzeButton.addEventListener("click", () => runAnalysis());
+        await loadPerformance();
+        const statusResponse = await fetch("/api/chart-library/status");
+        const libraryStatus = await statusResponse.json();
+        try {
+          if (!libraryStatus.available) throw new Error("Licensed Advanced Charts library is not installed.");
+          const advancedLibrary = "/static/charting_library/charting_library.standalone.js";
+          await loadScript(advancedLibrary);
+          chartPlaceholder.hidden = true;
+          chartMode.textContent = "Advanced Charts";
+          chartWidget = new window.TradingView.widget({
+            autosize: true,
+            symbol: selectedChartSymbol,
+            interval: ({ "1m": "1", "3m": "3", "5m": "5", "15m": "15", "30m": "30", "1h": "60", "2h": "120", "4h": "240", "1d": "1D", "1w": "1W", "1M": "1M" })[selectedChartInterval],
+            timezone: "Etc/UTC",
+            theme: "dark",
+            locale: "en",
+            library_path: "/static/charting_library/",
+            datafeed,
+            enabled_features: ["study_templates"],
+            disabled_features: ["use_localstorage_for_settings"],
+            studies: ["RSI@tv-basicstudies"]
+          });
+        } catch {
+          await startLightweightChart();
+        }
+      } catch (error) {
+        chartPlaceholder.hidden = false;
+        chartPlaceholder.textContent = error.message || "Could not initialize chart datafeed.";
+      }
+    }
+
+    function loadScript(source) {
+      return new Promise((resolve, reject) => {
+        const script = document.createElement("script");
+        script.src = source;
+        script.onload = resolve;
+        script.onerror = () => reject(new Error(`Could not load chart library: ${source}`));
+        document.head.append(script);
+      });
+    }
+
+    function changeChartSelection() {
+      selectedChartSymbol = chartSymbolSelect.value;
+      selectedChartInterval = chartIntervalSelect.value;
+      if (chartWidget) {
+        chartWidget.activeChart().setSymbol(selectedChartSymbol);
+        const resolution = ({
+          "1m": "1", "3m": "3", "5m": "5", "15m": "15", "30m": "30",
+          "1h": "60", "2h": "120", "4h": "240", "1d": "1D",
+          "1w": "1W", "1M": "1M"
+        })[selectedChartInterval];
+        if (resolution) chartWidget.activeChart().setResolution(resolution);
+      } else {
+        changeFallbackChart(selectedChartSymbol, selectedChartInterval);
+      }
+    }
+
+    async function runAnalysis() {
+      if (!selectedChartSymbol || !selectedChartInterval) return;
+      if (analysisPending) return;
+      analysisPending = true;
+      analyzeButton.disabled = true;
+      analysisResult.textContent = "Loading closed candles and calculating indicators…";
+      const query = new URLSearchParams({
+        symbol: selectedChartSymbol,
+        interval: selectedChartInterval,
+        preference: tradePreferenceSelect.value,
+        risk_percent: riskPercentInput.value
+      });
+      if (accountBalanceInput.value) query.set("account_balance", accountBalanceInput.value);
+      try {
+        const response = await fetch(`/api/analyze?${query}`);
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.detail || `Analysis failed (${response.status}).`);
+        renderAnalysis(result);
+        await loadPerformance();
+        if (result.latest_candle && !binanceSymbols.includes(result.symbol)) {
+          renderPrice({
+            symbol: result.symbol,
+            price: result.latest_candle.close,
+            interval: result.interval,
+            source: "Twelve Data"
+          });
+          datafeed.updateFromStream(result.latest_candle);
+          if (fallbackCandleSeries
+            && result.symbol === selectedChartSymbol
+            && result.interval === selectedChartInterval) {
+            updateFallbackBar(result.latest_candle);
+          }
+        }
+        analysisUpdated.textContent = `Updated ${new Date().toLocaleTimeString()}`;
+      } catch (error) {
+        analysisResult.textContent = error.message || "Analysis request failed.";
+        analysisUpdated.textContent = "";
+      } finally {
+        analysisPending = false;
+        analyzeButton.disabled = false;
+      }
+    }
+
+    async function loadPerformance() {
+      try {
+        const response = await fetch("/api/performance");
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.detail || `Performance request failed (${response.status}).`);
+        performanceSummary.textContent =
+          `${result.total_signals} signals · ${result.wins} wins · ${result.losses} losses · `
+          + `${result.flat} flat · ${result.pending} pending · `
+          + `${result.directional_win_rate_pct === null ? "N/A" : `${result.directional_win_rate_pct}%`} directional win rate`;
+      } catch (error) {
+        performanceSummary.textContent = error.message || "Could not load signal performance.";
+      }
+    }
+
+    function renderAnalysis(result) {
+      const indicators = result.indicators;
+      const cells = [
+        ["Market · timeframe", `${result.symbol} · ${result.interval}`],
+        ["Forecast horizon", `${result.forecast_horizon} · ${new Date(result.signal_for_candle_open_time).toLocaleString()}`],
+        ["Trend", result.current_trend],
+        ["Signal / prediction", `${result.action === "WAIT" ? "NO TRADE · " : ""}${result.next_candle_prediction}`],
+        ["Confidence level", `${result.confidence_level} · heuristic strength ${result.heuristic_strength_pct} (not win probability)`],
+        ["Brief rationale", result.brief_rationale],
+        ["Risk disclaimer", result.risk_disclaimer],
+        ["Preference result", result.action],
+        ["Reference entry · last closed price", result.entry === null ? "—" : format(result.entry)],
+        ["Stop loss", result.stop_loss === null ? "—" : format(result.stop_loss)],
+        ["Take profit 1 / 2", result.take_profit_1 === null ? "—" : `${format(result.take_profit_1)} / ${format(result.take_profit_2)}`],
+        ["Risk : reward · TP1 / TP2", result.risk_reward_tp1 === null ? "—" : `1:${result.risk_reward_tp1} / 1:${result.risk_reward_tp2}`],
+        ["EMA 20 / 50 / 200", `${format(indicators.ema_20)} / ${format(indicators.ema_50)} / ${format(indicators.ema_200)}`],
+        ["RSI · Stoch RSI", `${indicators.rsi_14.toFixed(1)} · ${indicators.stoch_rsi_k === null ? "N/A" : indicators.stoch_rsi_k.toFixed(1)}`],
+        ["MACD histogram", format(indicators.macd_histogram)],
+        ["ATR / volatility · Bollinger %B", `${format(indicators.atr_14)} (${indicators.atr_percent.toFixed(2)}%) · ${(indicators.bollinger_percent * 100).toFixed(1)}%`],
+        ["Volume / pattern", `${indicators.volume_available ? `${indicators.volume_ratio.toFixed(2)}×` : "Unavailable"} · ${indicators.candlestick_pattern}`],
+        ["Market quality filters", `${indicators.choppy_market ? "CHOPPY · NO TRADE" : "Not choppy"} · ${indicators.low_volume ? "LOW VOLUME · NO TRADE" : indicators.volume_available ? "Volume OK" : "Volume unavailable"}`],
+        ["Support / resistance", `${format(indicators.support_50)} / ${format(indicators.resistance_50)}`],
+        ["20-candle trendline slope", format(indicators.trendline_slope_20)],
+        ["Liquidity sweep · order-block candidates", `${indicators.liquidity_grab} · Bull ${indicators.bullish_order_block_candidate === null ? "—" : format(indicators.bullish_order_block_candidate)} / Bear ${indicators.bearish_order_block_candidate === null ? "—" : format(indicators.bearish_order_block_candidate)}`],
+        ["Higher-timeframe trend", Object.entries(result.higher_timeframe_trends).map(([interval, trend]) => `${interval}: ${trend}`).join(" · ")],
+        ["News blackout", result.news_filter.message],
+        ["Estimated position size", result.position_sizing.estimated_units === null
+          ? result.position_sizing.message
+          : `${format(result.position_sizing.estimated_units)} ${result.position_sizing.unit_label || "units"} · max risk ${result.position_sizing.max_risk_amount === null ? "—" : format(result.position_sizing.max_risk_amount)} USD (${result.position_sizing.risk_percent}%)`],
+        ["Abnormal volatility", indicators.volatility_spike ? "YES · NO TRADE" : "No spike versus recent ATR"]
+      ];
+      const grid = document.createElement("div");
+      grid.className = "analysis-grid";
+      for (const [label, value] of cells) {
+        const cell = document.createElement("div");
+        cell.className = "analysis-cell";
+        const title = document.createElement("span");
+        title.className = "muted";
+        title.textContent = label;
+        const content = document.createElement("strong");
+        content.textContent = value;
+        if (label === "Signal / prediction") content.className = result.action === "WAIT" ? "" : result.next_candle_prediction === "UP" ? "buy" : result.next_candle_prediction === "DOWN" ? "sell" : "";
+        cell.append(title, content);
+        grid.append(cell);
+      }
+      analysisResult.replaceChildren(grid);
+      if (result.warning) {
+        const warning = document.createElement("p");
+        warning.className = "analysis-warning";
+        warning.textContent = result.warning;
+        analysisResult.append(warning);
+      }
+    }
+
+    async function getChartHistory(symbol, interval, countBack = 500) {
+      const intervalSeconds = ({
+        "1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800,
+        "1h": 3600, "2h": 7200, "4h": 14400, "1d": 86400,
+        "1w": 604800, "1M": 2592000
+      })[interval];
+      if (!intervalSeconds) throw new Error(`Unsupported chart interval: ${interval}`);
+      const to = Math.floor(Date.now() / 1000);
+      const from = to - intervalSeconds * countBack;
+      const query = new URLSearchParams({
+        symbol,
+        interval,
+        from: String(from),
+        to: String(to),
+        countBack: String(countBack)
+      });
+      const response = await fetch(`/api/chart/history?${query}`);
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.detail || `Chart history request failed (${response.status}).`);
+      return result.bars;
+    }
+
+    async function startLightweightChart() {
+      await loadScript("https://unpkg.com/lightweight-charts@4.2.2/dist/lightweight-charts.standalone.production.js");
+      chartPlaceholder.hidden = true;
+      chartMode.textContent = "Lightweight Charts fallback";
+      document.getElementById("chart").hidden = true;
+      const fallbackContainer = document.createElement("div");
+      fallbackContainer.id = "fallback-chart";
+      document.getElementById("chart").after(fallbackContainer);
+      fallbackChart = window.LightweightCharts.createChart(fallbackContainer, {
+        autoSize: true,
+        layout: { background: { color: "#141d2e" }, textColor: "#aab8ce" },
+        grid: { vertLines: { color: "#26334a" }, horzLines: { color: "#26334a" } },
+        rightPriceScale: { borderColor: "#26334a" },
+        timeScale: { borderColor: "#26334a", timeVisible: true, secondsVisible: false }
+      });
+      fallbackCandleSeries = fallbackChart.addCandlestickSeries({
+        upColor: "#44d19d",
+        downColor: "#ff7885",
+        borderVisible: false,
+        wickUpColor: "#44d19d",
+        wickDownColor: "#ff7885"
+      });
+      const bars = await getChartHistory(selectedChartSymbol, selectedChartInterval);
+      const chartBars = bars.map((bar) => ({
+        time: Math.floor(bar.time / 1000),
+        open: bar.open,
+        high: bar.high,
+        low: bar.low,
+        close: bar.close
+      }));
+      fallbackCandleSeries.setData(chartBars);
+      fallbackLastBarTime = chartBars.length ? chartBars[chartBars.length - 1].time : undefined;
+      fallbackChart.timeScale().fitContent();
+    }
+
+    function handleMessage(message) {
+      if (message.type === "snapshot") {
+        message.data.prices.forEach(renderPrice);
+        renderFeedStatus(message.data.feed);
+      } else if (message.type === "feed_status") {
+        renderFeedStatus(message.data);
+      } else if (message.type === "price") {
+        renderPrice(message.data);
+      } else if (message.type === "candle" && datafeed) {
+        datafeed.updateFromStream(message.data);
+        if (fallbackCandleSeries
+          && message.data.symbol === selectedChartSymbol
+          && message.data.interval === selectedChartInterval) {
+          updateFallbackBar(message.data);
+        }
+      } else if (message.type === "signal_outcome") {
+        signalAlert.textContent = message.data.invalidated
+          ? `${message.data.symbol} ${message.data.interval} signal invalidated: the next candle closed ${message.data.actual_direction}.`
+          : `${message.data.symbol} ${message.data.interval} next-candle result: ${message.data.outcome}.`;
+        loadPerformance();
+      }
+    }
+
+    function connect() {
+      const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+      const socket = new WebSocket(`${protocol}//${location.host}/ws`);
+      socket.onopen = () => {
+        if (!feedStatus || feedStatus.state === "starting") {
+          status.textContent = "Dashboard connected · awaiting exchange feed status";
+          status.classList.remove("connected");
+        }
+      };
+      socket.onmessage = (event) => handleMessage(JSON.parse(event.data));
+      socket.onclose = () => {
+        status.textContent = "Dashboard disconnected · reconnecting";
+        status.classList.remove("connected");
+        if (datafeed) datafeed.resetSubscriptions();
+        setTimeout(connect, 2000);
+      };
+      socket.onerror = () => socket.close();
+    }
+
+    async function changeFallbackChart(symbol, interval) {
+      if (!fallbackCandleSeries) return;
+      selectedChartSymbol = symbol;
+      selectedChartInterval = interval;
+      const requestId = ++historyRequestId;
+      try {
+        const bars = await getChartHistory(symbol, interval);
+        if (requestId !== historyRequestId) return;
+        const chartBars = bars.map((bar) => ({
+          time: Math.floor(bar.time / 1000),
+          open: bar.open,
+          high: bar.high,
+          low: bar.low,
+          close: bar.close
+        }));
+        fallbackCandleSeries.setData(chartBars);
+        fallbackLastBarTime = chartBars.length ? chartBars[chartBars.length - 1].time : undefined;
+        fallbackChart.timeScale().fitContent();
+      } catch (error) {
+        if (requestId !== historyRequestId) return;
+        fallbackCandleSeries.setData([]);
+        fallbackLastBarTime = undefined;
+        chartPlaceholder.hidden = false;
+        chartPlaceholder.textContent = error.message || "Could not load chart history.";
+      }
+    }
+
+    function updateFallbackBar(candle) {
+      const time = Math.floor(candle.open_time / 1000);
+      if (fallbackLastBarTime !== undefined && time < fallbackLastBarTime) return;
+      fallbackCandleSeries.update({
+        time,
+        open: candle.open,
+        high: candle.high,
+        low: candle.low,
+        close: candle.close
+      });
+      fallbackLastBarTime = time;
+    }
+
+    initializeChart();
+    connect();
+  </script>
+</body>
+</html>

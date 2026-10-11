@@ -1,0 +1,7 @@
+.venv*/
+__pycache__/
+*.py[cod]
+.env
+market_signals.sqlite3
+market_signals.sqlite3-shm
+market_signals.sqlite3-wal
